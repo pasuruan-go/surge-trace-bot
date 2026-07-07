@@ -1,0 +1,10 @@
+{
+  "name": "surge-trace-bot",
+  "version": "1.0.0",
+  "description": "Bot Surge Trace Telegram lewat Vercel",
+  "main": "api/webhook.js",
+  "dependencies": {
+    "@supabase/supabase-js": "^2.43.0",
+    "telegraf": "^4.16.3"
+  }
+}
