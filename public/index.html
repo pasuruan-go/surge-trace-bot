@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>Surge Tracker Map</title>
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <!-- Telegram Web App Script -->
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <style>
+        body { padding: 0; margin: 0; font-family: sans-serif; }
+        html, body, #map { height: 100%; width: 100vw; }
+        #controls {
+            position: absolute; bottom: 20px; left: 50%;
+            transform: translateX(-50%); z-index: 1000;
+            background: white; padding: 15px; border-radius: 12px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.2); width: 85%; max-width: 360px;
+        }
+        button {
+            width: 100%; padding: 12px; margin: 5px 0;
+            border: none; border-radius: 6px; font-weight: bold; font-size: 14px;
+            cursor: pointer;
+        }
+        .btn-start { background-color: #2ec4b6; color: white; }
+        .btn-tag { background-color: #ff9f1c; color: white; }
+        .btn-save { background-color: #e71d36; color: white; }
+        #status { font-size: 12px; text-align: center; color: #666; margin-bottom: 5px; }
+    </style>
+</head>
+<body>
+
+    <div id="map"></div>
+    
+    <div id="controls">
+        <div id="status">Peta Siap. Tekan Mulai untuk tracking rute kabel.</div>
+        <button id="btnAction" class="btn-start" onclick="toggleTracking()">Mulai Survey Jalur</button>
+        <button id="btnTagUC" class="btn-tag" onclick="tagAsset('UC')" style="display:none;">Tagging UC</button>
+        <button id="btnTagDWDM" class="btn-tag" onclick="tagAsset('DWDM')" style="display:none; background-color: #3a86ff;">Tagging DWDM</button>
+    </div>
+
+    <script>
+        // Inisialisasi Telegram Web App
+        const tg = window.Telegram.WebApp;
+        tg.expand(); // Buka layar penuh
+
+        // Inisialisasi Peta - Default Center Indonesia
+        const map = L.map('map').setView([-7.75, 113.22], 13); 
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 19,
+            attribution: '© OpenStreetMap'
+        }).addTo(map);
+
+        let isTracking = false;
+        let watchId = null;
+        let routeCoordinates = [];
+        let routePolyline = L.polyline([], {color: 'red', weight: 4}).addTo(map);
+        let assets = [];
+
+        function toggleTracking() {
+            const btn = document.getElementById('btnAction');
+            const statusDiv = document.getElementById('status');
+            
+            if (!isTracking) {
+                // MULAI TRACKING
+                if (!navigator.geolocation) {
+                    alert("GPS tidak didukung di perangkat ini.");
+                    return;
+                }
+                
+                isTracking = true;
+                routeCoordinates = [];
+                assets = [];
+                btn.innerText = "Selesai & Simpan";
+                btn.className = "btn-save";
+                document.getElementById('btnTagUC').style.display = "block";
+                document.getElementById('btnTagDWDM').style.display = "block";
+                statusDiv.innerText = "GPS Aktif. Silakan berjalan menyusuri kabel...";
+
+                watchId = navigator.geolocation.watchPosition(
+                    (position) => {
+                        const lat = position.coords.latitude;
+                        const lng = position.coords.longitude;
+                        const currentPos = [lat, lng];
+                        
+                        routeCoordinates.push(currentPos);
+                        routePolyline.setLatLngs(routeCoordinates);
+                        map.setView(currentPos, 17);
+                        statusDiv.innerText = `Menelusuri... (${routeCoordinates.length} titik koordinat)`;
+                    },
+                    (err) => { console.error(err); },
+                    { enableHighAccuracy: true, distanceFilter: 3 } // Ambil data tiap bergeser 3 meter
+                );
+            } else {
+                // SELESAI & SIMPAN DATA
+                isTracking = false;
+                navigator.geolocation.clearWatch(watchId);
+                
+                // Kirim data akhir ke bot chat Telegram atau langsung panggil API Vercel
+                if(routeCoordinates.length < 2) {
+                    alert("Jalur terlalu pendek. Gagal menyimpan.");
+                    resetUI();
+                    return;
+                }
+
+                // Kirim payload data ke backend melalui fungsi bawaan Telegram
+                const payload = {
+                    route_name: "Kabel Surge " + new Date().toLocaleDateString('id-ID'),
+                    coordinates: routeCoordinates,
+                    assets: assets
+                };
+
+                tg.sendData(JSON.stringify(payload)); // Mengirim data ke chat bot dan otomatis menutup webview
+            }
+        }
+
+        function tagAsset(type) {
+            if (routeCoordinates.length === 0) return;
+            // Ambil titik lokasi terakhir dari urutan jalan kaki teknisi
+            const lastCoord = routeCoordinates[routeCoordinates.length - 1];
+            
+            assets.push({
+                type: type,
+                coords: lastCoord
+            });
+
+            L.marker(lastCoord).addTo(map)
+                .bindPopup(`<b>${type}</b> baru ditandai di sini.`)
+                .openPopup();
+                
+            tg.HapticFeedback.impactOccurred('medium'); // Efek getar di HP teknisi saat sukses tagging
+        }
+
+        function resetUI() {
+            document.getElementById('btnAction').innerText = "Mulai Survey Jalur";
+            document.getElementById('btnAction').className = "btn-start";
+            document.getElementById('btnTagUC').style.display = "none";
+            document.getElementById('btnTagDWDM').style.display = "none";
+            document.getElementById('status').innerText = "Peta Siap.";
+            routePolyline.setLatLngs([]);
+        }
+    </script>
+</body>
+</html>
