@@ -8,6 +8,65 @@ const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SER
 
 bot.start((ctx) => {
     return ctx.reply('Halo Mas Ecky! Silakan klik tombol "Buka Peta" di pojok kiri bawah untuk memulai survey rute kabel Surge.');
+}); // <-- Kunci perbaikan di sini, kurung penutup fungsi start harus ada.
+
+// PERINTAH: /trace [nama_kabel] [jarak] -> Contoh: /trace Surge 500
+bot.command('trace', async (ctx) => {
+    try {
+        const text = ctx.message.text; // Ambil teks penuh
+        const args = text.split(' '); // Pecah berdasarkan spasi
+
+        if (args.length < 3) {
+            return ctx.reply('⚠️ Format salah.\n\nGunakan format: `/trace [nama_kabel] [jarak_meter]`\nContoh: `/trace Surge 500`', { parse_mode: 'Markdown' });
+        }
+
+        const namaKabel = args[1];
+        const jarakCari = parseFloat(args[2]);
+
+        // 1. Jalankan query SQL pintar ke Supabase untuk cari titik koordinat & aset terdekat
+        const { data, error } = await supabase.rpc('trace_cable_location', {
+            p_cable_name: namaKabel,
+            p_distance: jarakCari
+        });
+
+        if (error) throw error;
+        if (!data || data.length === 0) {
+            return ctx.reply(`❌ Rute kabel dengan nama "${namaKabel}" tidak ditemukan di database.`);
+        }
+
+        const result = data[0];
+        
+        // 2. Kirim informasi detail ke teknisi
+        let responseMsg = `📍 *HASIL TRACE GANGGUAN (${jarakCari} M)*\n\n`;
+        responseMsg += `• *Rute:* ${result.route_name}\n`;
+        responseMsg += `• *Koordinat Target:* \`${result.target_lat}, ${result.target_lng}\`\n\n`;
+        
+        if (result.nearest_asset_type) {
+            responseMsg += `🔍 *Aset Terdekat di Lokasi:*\n`;
+            responseMsg += `• *Jenis:* ${result.nearest_asset_type}\n`;
+            responseMsg += `• *Jarak dari Titik Ukur:* ${Math.round(result.asset_distance_meters)} meter\n`;
+            responseMsg += `• *Info:* ${result.asset_desc || '-'}\n`;
+        } else {
+            responseMsg += `🔍 *Aset Terdekat:* Tidak ada perangkat terdaftar dalam radius 50 meter di sekitar lokasi ini.\n`;
+        }
+
+        // 3. Kirim juga Link Google Maps agar teknisi bisa langsung navigasi ke lokasi gangguan
+        const mapsUrl = `https://www.google.com/maps/search/?api=1&query=${result.target_lat},${result.target_lng}`;
+        
+        return ctx.reply(responseMsg, {
+            parse_mode: 'Markdown',
+            reply_markup: {
+                inline_keyboard: [
+                    [{ text: '🗺️ Buka di Google Maps', url: mapsUrl }]
+                ]
+            }
+        });
+
+    } catch (err) {
+        console.error('Error saat trace:', err);
+        return ctx.reply('❌ Terjadi kesalahan sistem saat menghitung koordinat jalur.');
+    }
+});
 });
 
 // MENANGKAP DATA YANG DIKIRIM OLEH WEB APP (tg.sendData)
