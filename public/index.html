@@ -92,29 +92,54 @@
                     (err) => { console.error(err); },
                     { enableHighAccuracy: true, distanceFilter: 3 } // Ambil data tiap bergeser 3 meter
                 );
-            } else {
+           } else {
                 // SELESAI & SIMPAN DATA
                 isTracking = false;
                 navigator.geolocation.clearWatch(watchId);
                 
-                // Kirim data akhir ke bot chat Telegram atau langsung panggil API Vercel
                 if(routeCoordinates.length < 2) {
                     alert("Jalur terlalu pendek. Gagal menyimpan.");
                     resetUI();
                     return;
                 }
 
-                // Kirim payload data ke backend melalui fungsi bawaan Telegram
+                // Tambahkan angka random (timestamp) di nama agar tidak bentrok (UNIQUE CONSTRAINT ERROR)
+                const uniqueRouteName = "Kabel Surge " + new Date().toLocaleDateString('id-ID') + " - " + Math.floor(Math.random() * 1000);
+                
                 const payload = {
-                    route_name: "Kabel Surge " + new Date().toLocaleDateString('id-ID'),
+                    route_name: uniqueRouteName,
                     coordinates: routeCoordinates,
-                    assets: assets
+                    assets: assets,
+                    user_id: tg.initDataUnsafe?.user?.id // Ambil ID Telegram pengguna untuk dikirim notifikasi
                 };
 
-                tg.sendData(JSON.stringify(payload)); // Mengirim data ke chat bot dan otomatis menutup webview
-            }
-        }
+                const btn = document.getElementById('btnAction');
+                btn.innerText = "Mengirim ke Server...";
+                btn.className = "btn-start";
+                btn.disabled = true;
 
+                // Tembak data berat secara langsung menggunakan API internal Vercel (Mengatasi limit 4KB Telegram)
+                fetch('/api/save-survey', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        tg.close(); // Tutup aplikasi web jika sukses. Telegram otomatis memunculkan chat balasan.
+                    } else {
+                        alert("Gagal Simpan Data: " + data.error);
+                        resetUI();
+                        btn.disabled = false;
+                    }
+                })
+                .catch(err => {
+                    alert("Jaringan bermasalah. Server Vercel tidak merespons.");
+                    resetUI();
+                    btn.disabled = false;
+                });
+            }
         function tagAsset(type) {
             if (routeCoordinates.length === 0) return;
             // Ambil titik lokasi terakhir dari urutan jalan kaki teknisi
