@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Surge Monitor - Web Dashboard</title>
+    <!-- Leaflet CSS & JS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <style>
+        * { box-sizing: border-box; }
+        body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; display: flex; height: 100vh; background-color: #f4f6f9; }
+        #sidebar { width: 350px; background: white; border-right: 1px solid #e0e0e0; display: flex; flex-direction: column; padding: 20px; z-index: 1010; box-shadow: 2px 0 10px rgba(0,0,0,0.05); }
+        #map { flex-grow: 1; height: 100%; }
+        h1 { font-size: 18px; color: #1e293b; margin-top: 0; border-bottom: 2px solid #3b82f6; padding-bottom: 10px; }
+        .stat-card { background: #eff6ff; border: 1px solid #bfdbfe; padding: 15px; border-radius: 8px; margin-bottom: 20px; }
+        .stat-title { font-size: 12px; color: #1e40af; font-weight: bold; text-transform: uppercase; }
+        .stat-value { font-size: 24px; color: #1d4ed8; font-weight: bold; margin-top: 5px; }
+        .list-title { font-size: 14px; font-weight: bold; color: #475569; margin-bottom: 10px; }
+        .route-list { flex-grow: 1; overflow-y: auto; }
+        .route-item { padding: 12px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; margin-bottom: 8px; cursor: pointer; transition: 0.2s; }
+        .route-item:hover { background: #e2e8f0; border-color: #cbd5e1; }
+        .route-name { font-size: 14px; font-weight: bold; color: #1e293b; }
+        .route-meta { font-size: 12px; color: #64748b; margin-top: 4px; display: flex; justify-content: space-between; }
+    </style>
+</head>
+<body>
+
+    <div id="sidebar">
+        <h1>⚡ SURGE PATH MONITOR</h1>
+        
+        <div class="stat-card">
+            <div class="stat-title">Total Jarak Ter-survey</div>
+            <div id="totalDistance" class="stat-value">0.00 KM</div>
+        </div>
+
+        <div class="list-title">Daftar Hasil Survey Lapangan</div>
+        <div id="routeList" class="route-list">
+            <p style="color: #94a3b8; font-size: 13px;">Memuat data rute...</p>
+        </div>
+    </div>
+
+    <div id="map"></div>
+
+    <script>
+        // Masukkan kredensial Supabase Anda di sini (Aman karena ini dashboard internal/baca data)
+        const SUPABASE_URL = "ISI_DENGAN_URL_SUPABASE_ANDA"; 
+        const SUPABASE_KEY = "ISI_DENGAN_ANON_KEY_ATAU_SERVICE_ROLE_KEY_ANDA";
+
+        // Inisialisasi Peta
+        const map = L.map('map').setView([-7.75, 113.22], 12);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 19, attribution: '© OpenStreetMap'
+        }).addTo(map);
+
+        let mapLayers = [];
+
+        // PENGAMBILAN DATA VIA API INTERNAL VERCEL (Aman & Menggunakan ENV Vercel)
+        async function fetchDashboardData() {
+            try {
+                // Tembak langsung ke endpoint serverless di domain yang sama
+                const response = await fetch('/api/get-dashboard-data');
+                const result = await response.json();
+
+                if (result.error) {
+                    throw new Error(result.message);
+                }
+
+                renderDashboard(result.routes, result.assets);
+            } catch (error) {
+                console.error('Gagal memuat data dasbor:', error);
+                document.getElementById('routeList').innerHTML = `<p style="color: red;">Gagal memuat data dari API internal.</p>`;
+            }
+        }
+
+        function renderDashboard(routes, assets) {
+            const listContainer = document.getElementById('routeList');
+            listContainer.innerHTML = '';
+            
+            let totalKm = 0;
+            
+            // Bersihkan layer peta jika ada sisa reload Sebelumnya
+            mapLayers.forEach(layer => map.removeLayer(layer));
+            mapLayers = [];
+
+            if(routes.length === 0) {
+                listContainer.innerHTML = `<p style="color: #64748b; font-size: 13px;">Belum ada rute hasil survey.</p>`;
+                return;
+            }
+
+            routes.forEach(route => {
+                // Buat objek GeoJSON Leaflet untuk Jalur Kabel
+                if(route.geom_geojson) {
+                    const geojsonLayer = L.geoJSON(route.geom_geojson, {
+                        style: { color: '#ef4444', weight: 5, opacity: 0.8 }
+                    }).addTo(map);
+                    
+                    // Kalkulasi kasar panjang rute untuk dasbor web (dalam KM)
+                    // Menggunakan metode kalkulasi bawaan koordinat map jika PostGIS length belum ditarik
+                    let routeLenMeter = 0;
+                    const coords = route.geom_geojson.coordinates;
+                    for(let i=0; i<coords.length-1; i++) {
+                        routeLenMeter += L.latLng(coords[i][1], coords[i][0]).distanceTo(L.latLng(coords[i+1][1], coords[i+1][0]));
+                    }
+                    
+                    const distanceKm = routeLenMeter / 1000;
+                    totalKm += distanceKm;
+
+                    mapLayers.push(geojsonLayer);
+
+                    // Cari aset yang terikat dengan rute ini
+                    const routeAssets = assets.filter(a => a.route_id === route.id);
+                    
+                    // Gambar pin aset di peta
+                    routeAssets.forEach(asset => {
+                        if(asset.geom_geojson) {
+                            const markerColor = asset.asset_type === 'DWDM' ? 'blue' : 'orange';
+                            const assetMarker = L.circleMarker([asset.geom_geojson.coordinates[1], asset.geom_geojson.coordinates[0]], {
+                                radius: 8,
+                                fillColor: markerColor,
+                                color: '#fff',
+                                weight: 2,
+                                fillOpacity: 0.9
+                            }).addTo(map)
+                            .bindPopup(`<b>Aset: ${asset.asset_type}</b><br>Posisi: Meter ke-${Math.round(asset.distance_from_origin)}`);
+                            
+                            mapLayers.push(assetMarker);
+                        }
+                    });
+
+                    // Tambahkan item ke list sidebar
+                    const item = document.createElement('div');
+                    item.className = 'route-item';
+                    item.onclick = () => {
+                        map.fitBounds(geojsonLayer.getBounds());
+                    };
+                    
+                    const tgl = new Date(route.created_at).toLocaleDateString('id-ID');
+                    item.innerHTML = `
+                        <div class="route-name">📍 ${route.name}</div>
+                        <div class="route-meta">
+                            <span>📏 ${distanceKm.toFixed(2)} KM</span>
+                            <span>📦 ${routeAssets.length} Aset</span>
+                            <span>📅 ${tgl}</span>
+                        </div>
+                    `;
+                    listContainer.appendChild(item);
+                }
+            });
+
+            // Update Total Jarak di Atas
+            document.getElementById('totalDistance').innerText = `${totalKm.toFixed(2)} KM`;
+            
+            // Fokuskan peta ke seluruh rute yang ada
+            if(mapLayers.length > 0) {
+                const group = new L.featureGroup(mapLayers.filter(l => l.getBounds));
+                if(group.getBounds().isValid()) {
+                    map.fitBounds(group.getBounds());
+                }
+            }
+        }
+
+        // Jalankan saat halaman dibuka
+        fetchDashboardData();
+        // Auto refresh tiap 30 detik agar jika teknisi nambah data langsung muncul
+        setInterval(fetchDashboardData, 30000);
+    </script>
+</body>
+</html>
