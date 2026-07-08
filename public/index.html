@@ -115,7 +115,7 @@
                         statusDiv.innerText = `Menelusuri... (${routeCoordinates.length} titik koordinat)`;
                     },
                     (err) => { console.error(err); },
-                    { enableHighAccuracy: true, distanceFilter: 3 }
+                    { enableHighAccuracy: true, distanceFilter: 15, maximumAge: 0 }
                 );
             } else {
                 // KONDISI B: SELESAI & SIMPAN DATA
