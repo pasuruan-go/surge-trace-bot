@@ -1,20 +1,25 @@
 const { Telegraf } = require('telegraf');
 const { createClient } = require('@supabase/supabase-js');
 
+// Validasi Environment Variables
 if (!process.env.TELEGRAM_TOKEN) throw new Error('TELEGRAM_TOKEN is missing');
+if (!process.env.SUPABASE_URL) throw new Error('SUPABASE_URL is missing');
+if (!process.env.SUPABASE_SERVICE_ROLE_KEY) throw new Error('SUPABASE_SERVICE_ROLE_KEY is missing');
 
 const bot = new Telegraf(process.env.TELEGRAM_TOKEN);
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
 
+// 1. Perintah /start
 bot.start((ctx) => {
-    return ctx.reply('Halo Mas Ecky! Silakan klik tombol "Buka Peta" di pojok kiri bawah untuk memulai survey rute kabel Surge.');
-}); // <-- Kunci perbaikan di sini, kurung penutup fungsi start harus ada.
+    return ctx.reply('Halo Mas Ecky! Silakan klik tombol "Buka Peta" di pojok kiri bawah untuk memulai survey rute kabel Surge, atau gunakan perintah /trace [nama_kabel] [jarak] untuk mencari lokasi gangguan.');
+});
 
-// PERINTAH: /trace [nama_kabel] [jarak] -> Contoh: /trace Surge 500
+// 2. Perintah /trace (Pencari Jarak Gangguan)
 bot.command('trace', async (ctx) => {
+    console.log('Menerima perintah trace:', ctx.message.text);
     try {
-        const text = ctx.message.text; // Ambil teks penuh
-        const args = text.split(' '); // Pecah berdasarkan spasi
+        const text = ctx.message.text;
+        const args = text.split(' ');
 
         if (args.length < 3) {
             return ctx.reply('⚠️ Format salah.\n\nGunakan format: `/trace [nama_kabel] [jarak_meter]`\nContoh: `/trace Surge 500`', { parse_mode: 'Markdown' });
@@ -23,20 +28,27 @@ bot.command('trace', async (ctx) => {
         const namaKabel = args[1];
         const jarakCari = parseFloat(args[2]);
 
-        // 1. Jalankan query SQL pintar ke Supabase untuk cari titik koordinat & aset terdekat
+        if (isNaN(jarakCari)) {
+            return ctx.reply('⚠️ Jarak harus berupa angka. Contoh: 500');
+        }
+
+        // Jalankan query RPC ke Supabase
         const { data, error } = await supabase.rpc('trace_cable_location', {
             p_cable_name: namaKabel,
             p_distance: jarakCari
         });
 
-        if (error) throw error;
+        if (error) {
+            console.error('Supabase RPC Error:', error);
+            return ctx.reply(`❌ Database Error: ${error.message}`);
+        }
+
         if (!data || data.length === 0) {
-            return ctx.reply(`❌ Rute kabel dengan nama "${namaKabel}" tidak ditemukan di database.`);
+            return ctx.reply(`❌ Rute kabel dengan nama "${namaKabel}" tidak ditemukan atau tidak memiliki koordinat.`);
         }
 
         const result = data[0];
         
-        // 2. Kirim informasi detail ke teknisi
         let responseMsg = `📍 *HASIL TRACE GANGGUAN (${jarakCari} M)*\n\n`;
         responseMsg += `• *Rute:* ${result.route_name}\n`;
         responseMsg += `• *Koordinat Target:* \`${result.target_lat}, ${result.target_lng}\`\n\n`;
@@ -50,37 +62,30 @@ bot.command('trace', async (ctx) => {
             responseMsg += `🔍 *Aset Terdekat:* Tidak ada perangkat terdaftar dalam radius 50 meter di sekitar lokasi ini.\n`;
         }
 
-        // 3. Kirim juga Link Google Maps agar teknisi bisa langsung navigasi ke lokasi gangguan
         const mapsUrl = `https://www.google.com/maps/search/?api=1&query=${result.target_lat},${result.target_lng}`;
         
         return ctx.reply(responseMsg, {
             parse_mode: 'Markdown',
             reply_markup: {
-                inline_keyboard: [
-                    [{ text: '🗺️ Buka di Google Maps', url: mapsUrl }]
-                ]
+                inline_keyboard: [[{ text: '🗺️ Buka di Google Maps', url: mapsUrl }]]
             }
         });
 
     } catch (err) {
-        console.error('Error saat trace:', err);
-        return ctx.reply('❌ Terjadi kesalahan sistem saat menghitung koordinat jalur.');
+        console.error('Error runtime pada command trace:', err);
+        return ctx.reply('❌ Terjadi kesalahan internal pada server bot.');
     }
 });
-});
 
-// MENANGKAP DATA YANG DIKIRIM OLEH WEB APP (tg.sendData)
+// 3. Penangkap Data dari Web App Peta
 bot.on('web_app_data', async (ctx) => {
     try {
         const rawData = ctx.message.web_app_data.data;
-        const parsed = JSON.parse(rawData); // Mengambil payload: route_name, coordinates, assets
+        const parsed = JSON.parse(rawData);
 
-        // 1. FORMAT DATA KOORDINAT JALUR MENJADI LINESTRING GEOJSON
-        // Format koordinat di Leaflet adalah [lat, lng], PostGIS butuh [lng, lat]
         const formattedCoords = parsed.coordinates.map(coord => `${coord[1]} ${coord[0]}`).join(', ');
         const lineStringWKT = `LINESTRING(${formattedCoords})`;
 
-        // 2. SIMPAN JALUR UTAMA KABEL KE TABEL routes
         const { data: routeData, error: routeError } = await supabase
             .from('routes')
             .insert([{ name: parsed.route_name, geom: lineStringWKT }])
@@ -91,43 +96,37 @@ bot.on('web_app_data', async (ctx) => {
 
         const routeId = routeData.id;
 
-        // 3. JIKA ADA ASET YANG DITAGGING (UC / DWDM), SIMPAN KE TABEL node_assets
         if (parsed.assets && parsed.assets.length > 0) {
             for (const asset of parsed.assets) {
-                const pointWKT = `POINT(${asset.coords[1]} ${asset.coords[0]})`;
-
-                // Hitung otomatis jarak aset ini dari titik awal kabel menggunakan PostGIS
-                // Kita gunakan query RPC atau insert mentah dengan rumus spasial
-                const { error: assetError } = await supabase.rpc('insert_asset_with_distance', {
+                await supabase.rpc('insert_asset_with_distance', {
                     p_route_id: routeId,
                     p_asset_type: asset.type,
                     p_lng: asset.coords[1],
                     p_lat: asset.coords[0],
-                    p_desc: `Tagging otomatis dari lapangan`
+                    p_desc: `Tagging otomatis lapangan`
                 });
-                
-                if (assetError) console.error('Gagal simpan aset:', assetError);
             }
         }
 
-        return ctx.reply(`✅ DATA BERHASIL DISIMPAN!\n\nNama Rute: ${parsed.route_name}\nJumlah Titik Jalur: ${parsed.coordinates.length}\nJumlah Perangkat: ${parsed.assets.length}\n\nData sudah masuk ke database Supabase dan langsung tampil di Dashboard.`);
+        return ctx.reply(`✅ DATA BERHASIL DISIMPAN!\n\nNama Rute: ${parsed.route_name}\nJumlah Titik Jalur: ${parsed.coordinates.length}\nJumlah Perangkat: ${parsed.assets.length}`);
 
     } catch (err) {
         console.error('Error proses Web App data:', err);
-        return ctx.reply('❌ Gagal memproses dan menyimpan data survey lapangan. Periksa log server.');
+        return ctx.reply('❌ Gagal memproses data survey lapangan.');
     }
 });
 
+// Webhook handler untuk Vercel
 module.exports = async (req, res) => {
     if (req.method === 'POST') {
         try {
             await bot.handleUpdate(req.body);
             return res.status(200).json({ status: 'ok' });
         } catch (err) {
-            console.error(err);
+            console.error('Global Webhook Error:', err);
             return res.status(500).send('Error');
         }
     } else {
-        return res.status(200).send('Bot berjalan...');
+        return res.status(200).send('Bot berjalan normal.');
     }
 };
