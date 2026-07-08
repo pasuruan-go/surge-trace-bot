@@ -165,21 +165,31 @@
                 });
             }
         }
-        function tagAsset(type) {
-            if (routeCoordinates.length === 0) return;
-            // Ambil titik lokasi terakhir dari urutan jalan kaki teknisi
+       function tagAsset(type) {
+            if (routeCoordinates.length === 0) {
+                alert("Jalur belum dimulai. Tidak bisa tagging.");
+                return;
+            }
+            
+            // Paksa teknisi memasukkan keterangan
+            const desc = prompt(`Masukkan keterangan untuk perangkat ${type}\n(Contoh: UC baru, Gamas tgl 12, dll):`);
+            
+            // Jika teknisi menekan 'Cancel', batalkan tagging
+            if (desc === null) return; 
+
             const lastCoord = routeCoordinates[routeCoordinates.length - 1];
             
             assets.push({
                 type: type,
-                coords: lastCoord
+                coords: lastCoord,
+                description: desc || '-' // Simpan deskripsi ke array
             });
 
             L.marker(lastCoord).addTo(map)
-                .bindPopup(`<b>${type}</b> baru ditandai di sini.`)
+                .bindPopup(`<b>${type}</b><br>Info: ${desc || '-'}`)
                 .openPopup();
                 
-            tg.HapticFeedback.impactOccurred('medium'); // Efek getar di HP teknisi saat sukses tagging
+            tg.HapticFeedback.impactOccurred('medium');
         }
 
         function resetUI() {
