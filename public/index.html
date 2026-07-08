@@ -57,19 +57,44 @@
         let routeCoordinates = [];
         let routePolyline = L.polyline([], {color: 'red', weight: 4}).addTo(map);
         let assets = [];
+        let wakeLock = null; // 1. Variabel Wake Lock Disiapkan
+
+        // 2. Fungsi Memaksa Layar Nyala
+        async function requestWakeLock() {
+            try {
+                if ('wakeLock' in navigator) {
+                    wakeLock = await navigator.wakeLock.request('screen');
+                    console.log('Layar dipaksa menyala.');
+                }
+            } catch (err) {
+                console.error('Wake Lock gagal:', err);
+            }
+        }
+
+        // 3. Fungsi Melepas Kuncian Layar
+        function releaseWakeLock() {
+            if (wakeLock !== null) {
+                wakeLock.release().then(() => {
+                    wakeLock = null;
+                    console.log('Penguncian layar dilepas.');
+                });
+            }
+        }
 
         function toggleTracking() {
             const btn = document.getElementById('btnAction');
             const statusDiv = document.getElementById('status');
             
             if (!isTracking) {
-                // MULAI TRACKING
+                // KONDISI A: MULAI TRACKING
                 if (!navigator.geolocation) {
                     alert("GPS tidak didukung di perangkat ini.");
                     return;
                 }
                 
                 isTracking = true;
+                requestWakeLock(); // --> LAYAR DIKUNCI NYALA DI SINI
+                
                 routeCoordinates = [];
                 assets = [];
                 btn.innerText = "Selesai & Simpan";
@@ -90,11 +115,12 @@
                         statusDiv.innerText = `Menelusuri... (${routeCoordinates.length} titik koordinat)`;
                     },
                     (err) => { console.error(err); },
-                    { enableHighAccuracy: true, distanceFilter: 3 } // Ambil data tiap bergeser 3 meter
+                    { enableHighAccuracy: true, distanceFilter: 3 }
                 );
-           } else {
-                // SELESAI & SIMPAN DATA
+            } else {
+                // KONDISI B: SELESAI & SIMPAN DATA
                 isTracking = false;
+                releaseWakeLock(); // --> KUNCIAN LAYAR DILEPAS DI SINI
                 navigator.geolocation.clearWatch(watchId);
                 
                 if(routeCoordinates.length < 2) {
@@ -103,22 +129,20 @@
                     return;
                 }
 
-                // Tambahkan angka random (timestamp) di nama agar tidak bentrok (UNIQUE CONSTRAINT ERROR)
                 const uniqueRouteName = "Kabel Surge " + new Date().toLocaleDateString('id-ID') + " - " + Math.floor(Math.random() * 1000);
                 
                 const payload = {
                     route_name: uniqueRouteName,
                     coordinates: routeCoordinates,
                     assets: assets,
-                    user_id: tg.initDataUnsafe?.user?.id // Ambil ID Telegram pengguna untuk dikirim notifikasi
+                    user_id: tg.initDataUnsafe?.user?.id
                 };
 
-                const btn = document.getElementById('btnAction');
                 btn.innerText = "Mengirim ke Server...";
                 btn.className = "btn-start";
                 btn.disabled = true;
 
-                // Tembak data berat secara langsung menggunakan API internal Vercel (Mengatasi limit 4KB Telegram)
+                // Tembak data berat langsung ke Vercel API
                 fetch('/api/save-survey', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -127,7 +151,7 @@
                 .then(response => response.json())
                 .then(data => {
                     if (data.success) {
-                        tg.close(); // Tutup aplikasi web jika sukses. Telegram otomatis memunculkan chat balasan.
+                        tg.close();
                     } else {
                         alert("Gagal Simpan Data: " + data.error);
                         resetUI();
@@ -140,6 +164,7 @@
                     btn.disabled = false;
                 });
             }
+        }
         function tagAsset(type) {
             if (routeCoordinates.length === 0) return;
             // Ambil titik lokasi terakhir dari urutan jalan kaki teknisi
