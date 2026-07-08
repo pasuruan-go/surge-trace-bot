@@ -11,7 +11,7 @@ const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SER
 
 // 1. Perintah /start
 bot.start((ctx) => {
-    return ctx.reply('Halo Mas Ecky! Silakan klik tombol "Buka Peta" di pojok kiri bawah untuk memulai survey rute kabel Surge, atau gunakan perintah /trace [nama_kabel] [jarak] untuk mencari lokasi gangguan.');
+    return ctx.reply('Halo Mas ! Silakan klik tombol "Buka Peta" di pojok kiri bawah untuk memulai survey rute kabel Surge, atau gunakan perintah /trace [nama_kabel] [jarak] untuk mencari lokasi gangguan.');
 });
 
 // 2. Perintah /trace (Pencari Jarak Gangguan)
