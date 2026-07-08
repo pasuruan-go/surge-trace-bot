@@ -46,7 +46,7 @@ module.exports = async (req, res) => {
                     p_asset_type: asset.type,
                     p_lng: asset.coords[1],
                     p_lat: asset.coords[0],
-                    p_desc: `Tagging otomatis lapangan`
+                    p_desc: asset.description || `Tagging dari lapangan`
                 });
             }
         }
